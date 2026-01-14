@@ -761,6 +761,7 @@ struct OfflineEmbeddingExtractor {
     }
 
     private static func emitProfileLog(_ message: String) {
+        guard ProcessInfo.processInfo.environment["FLUIDAUDIO_PROFILE"] != nil else { return }
         let line = "[Profiling] \(message)\n"
         if let data = line.data(using: .utf8) {
             FileHandle.standardError.write(data)
