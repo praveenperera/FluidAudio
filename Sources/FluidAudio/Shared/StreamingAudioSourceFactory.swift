@@ -123,7 +123,8 @@ public struct StreamingAudioSourceFactory {
 
         var totalSamples = 0
         let inputComplete = OSAllocatedUnfairLock(initialState: false)
-        let readError = OSAllocatedUnfairLock<Error?>(initialState: nil)
+        let readError = OSAllocatedUnfairLock<(error: Error, position: AVAudioFramePosition)?>(initialState: nil)
+        let totalFileFrames = audioFile.length
 
         // Buffer is only accessed synchronously by AVAudioConverter's input block callback
         nonisolated(unsafe) let capturedInputBuffer = inputBuffer
@@ -143,8 +144,15 @@ public struct StreamingAudioSourceFactory {
                     capturedInputBuffer.frameLength = 0
                 }
             } catch {
-                readError.withLock { $0 = error }
-                capturedInputBuffer.frameLength = 0
+                // MP3s often have inaccurate frame counts; if we've read 95%+ of the file,
+                // treat end-of-file errors as normal completion rather than failure
+                let progressRatio = Double(audioFile.framePosition) / Double(totalFileFrames)
+                if progressRatio >= 0.95 {
+                    capturedInputBuffer.frameLength = 0
+                } else {
+                    readError.withLock { $0 = (error, audioFile.framePosition) }
+                    capturedInputBuffer.frameLength = 0
+                }
             }
 
             guard capturedInputBuffer.frameLength > 0 else {
@@ -172,9 +180,10 @@ public struct StreamingAudioSourceFactory {
                 )
             }
 
-            if let error = readError.withLock({ $0 }) {
+            if let readFailure = readError.withLock({ $0 }) {
+                let positionSecs = Double(readFailure.position) / inputFormat.sampleRate
                 throw StreamingAudioError.processingFailed(
-                    "Failed while reading audio: \(error.localizedDescription)"
+                    "Failed while reading audio at frame \(readFailure.position) (\(String(format: "%.1f", positionSecs))s): \(readFailure.error.localizedDescription)"
                 )
             }
 
